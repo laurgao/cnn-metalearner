@@ -8,12 +8,13 @@ import torch.nn.functional as F
 
 N_IN = 1  # number of input channels
 N_BATCH = 16
+N_SIZE = 28
 
 
 def generate_random_input_data(batchsize=N_BATCH):
     # torch.rand creates random values uniformly [0, 1]
     # image data is usually scaled to [0, 1] from the [0, 255] range when inputted to ml models.
-    return torch.rand((batchsize, N_IN, 28, 28), requires_grad=True)
+    return torch.rand((batchsize, N_IN, N_SIZE, N_SIZE), requires_grad=True)
     # minibatch, in channels, height, width
 
 
@@ -107,25 +108,6 @@ def cursed_loss_function(probabilities):
     return top_loss + bottom_loss
 
 
-def unsquare_loss_function(probabilities):
-    # probabilities: output of cursed_predictor
-    probabilities_top = probabilities[:, 0]
-
-    # sort
-    sorted_tensor, indices = torch.sort(probabilities_top, descending=True)
-    # these are sorted from highest prob of top to lowest prob of top
-
-    # split into 2 groups
-    t8 = sorted_tensor[:N_BATCH // 2]
-    b8 = sorted_tensor[N_BATCH // 2:]
-
-    # compute loss (log things?? squares? maybe not direct difference? idfk)
-    top_loss = torch.sum(torch.abs(t8 - 1.0))
-    bottom_loss = torch.sum(torch.abs(b8 - 0.0))
-
-    return top_loss + bottom_loss
-
-
 def cursed_train():
     image_tensor = generate_random_input_data()
 
@@ -150,22 +132,9 @@ def cursed_train():
     sorted_tensor = image_tensor[indices]
     # these are sorted from highest prob of top to lowest prob of top
 
-    # evaluate the loss function
-    # print("overall eval: ", unsquare_loss_function(probabilities)) cross entropy works slightly better idk
-
     # numpy_data = data.detach().numpy() # convert to numpy array
     from torchvision.utils import save_image
-
-    # Ensure that the tensor is in CPU memory
     sorted_tensor = sorted_tensor.cpu()
-
-    # torch's `save_image` want the tensor values between 0 and 1 for RGB images (instead of between 0 and 255)??
-    # this image is on the order of [-.009, 1.009] which is like, small enough that i dont wanna normalize it lol?
-    # or ig i can,,, idk if it makes a difference
-    # or maybe i should normalize after each
-    # min_vals, _ = torch.min(image_tensor, dim=1)
-
-    # 'nrow' determines the number of images to be displayed in each row
     save_image(sorted_tensor, 'images.png', nrow=4)
 
     # i should also like store image data along with their labels.
