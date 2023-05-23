@@ -1,41 +1,35 @@
+import matplotlib.pyplot as plt
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
 # main function: weights (tensor) + data (tensor) -> 16 pairs of scalars (representing classification probabilities)
 
-# so you want random image of 28x28 pixels and 16 of them.
-# 16x28x28
+N_IN = 1  # number of input channels
+N_BATCH = 16
 
 
-def generate_random_input_data(batchsize=16):
-    # assume grayscale for now
-    # data should be normalized to like 0 mean stdev 1
-    w = torch.rand((batchsize, 1, 28, 28))
-    # w = w * 255
-    w.requires_grad = True
-    return w
+def generate_random_input_data(batchsize=N_BATCH):
+    # torch.rand creates random values uniformly [0, 1]
+    # image data is usually scaled to [0, 1] from the [0, 255] range when inputted to ml models.
+    return torch.rand((batchsize, N_IN, 28, 28), requires_grad=True)
     # minibatch, in channels, height, width
-
-# now we want to generate random weights
-# i pulled these numbers out of my ass, let's do 2 conv layers with 4 and 8 filters
-# we're going to store them as tensors lol?
-# the kernel will be 3x3
-# layer 1: 1 input channel, 8 output channels
-# so dim is 8x3x3?
-# layer 2: 8 input channels, hm idk how many output
-# this function returns a sequence (?) of tensors
 
 
 def generate_random_weights():
-    conv1 = generate_random_weights_for_layer(4, 1, 3, 3)
-    conv2 = generate_random_weights_for_layer(8, 4, 3, 3)
-    linear_transformation = torch.empty(24*24*8, 2)
+    # now we want to generate random weights
+    # 3 conv layers 4 filters per layer
+    conv1 = generate_random_weights_for_layer(4, N_IN, 3, 3)
+    conv2 = generate_random_weights_for_layer(4, 4, 3, 3)
+    conv3 = generate_random_weights_for_layer(4, 4, 3, 3)
+
+    linear_transformation = torch.empty(64, 2)
     linear_transformation = nn.init.xavier_uniform_(
         linear_transformation, gain=nn.init.calculate_gain('relu'))
     linear_transformation.requires_grad = True
 
-    return conv1, conv2, linear_transformation
+    return conv1, conv2, conv3, linear_transformation
 
 
 def generate_random_weights_for_layer(out_channels, in_channels, w, h):
@@ -51,33 +45,41 @@ def my_relu(tensor):
 
 
 class WeirdCNN(nn.Module):
-    def __init__(self, conv1, conv2, lt):
+    def __init__(self, conv1, conv2, conv3, lt):
         super().__init__()
         # self.fuckyweights = generate_random_weights()
         self.conv1 = conv1
         self.conv2 = conv2
+        self.conv3 = conv3
         self.linear_transformation = lt
-        #  first dim is almost always batch
-        # 2nd dim is sequence wtv that is
-        # x y channel
+        self.max_pool = nn.MaxPool2d(2, 2)
+        # for odd number so edge doesn't get cut off
+        self.max_pool_odd = nn.MaxPool2d(kernel_size=2, stride=2, padding=1)
 
     def forward(self, input):
         feature_maps_1 = F.conv2d(input, self.conv1)  # 26
         # apply relu
-        feature_maps_1_1 = torch.relu(feature_maps_1)
+        feature_maps_1 = torch.relu(feature_maps_1)
+        feature_maps_1 = self.max_pool(feature_maps_1)  # 13
 
         # layer 2
-        feature_maps_2 = F.conv2d(feature_maps_1_1, self.conv2)  # 24
-        feature_maps_2_1 = torch.relu(feature_maps_2)
+        # does this fn involve adding shit up too?
+        feature_maps_2 = F.conv2d(feature_maps_1, self.conv2)  # 11
+        feature_maps_2 = torch.relu(feature_maps_2)
+        feature_maps_2 = self.max_pool_odd(feature_maps_2)  # 6
 
-        y3 = feature_maps_2_1.flatten(1)  # should be 16x(24x24x8)
+        # layer 3
+        feature_maps_3 = F.conv2d(feature_maps_2, self.conv3)  # 4
+        feature_maps_3 = torch.relu(feature_maps_3)
 
-        # you want this to be in the range of like -5 to 5
+        y3 = feature_maps_3.flatten(1)  # should be 16x(4x4x4)
+
+        # you want this y before softmax to be in the range of like -5 to 5
+
         y = torch.matmul(y3, self.linear_transformation)
 
         # softmax y
-        y = torch.softmax(y, dim=1)
-        return y  # LOL
+        return torch.softmax(y, dim=1)
 
 
 def cursed_predictor(input_data, weights_sequence):
@@ -86,8 +88,8 @@ def cursed_predictor(input_data, weights_sequence):
     return model(input_data)
 
 
-def cursed_loss_function(input_data, weights_sequence):
-    probabilities = cursed_predictor(input_data, weights_sequence)
+def cursed_loss_function(probabilities):
+    # probabilities: output of cursed_predictor
     probabilities_top = probabilities[:, 0]
 
     # sort
@@ -95,49 +97,79 @@ def cursed_loss_function(input_data, weights_sequence):
     # these are sorted from highest prob of top to lowest prob of top
 
     # split into 2 groups
-    # top 8
-    t8 = sorted_tensor[:8]
-    # bottom 8
-    b8 = sorted_tensor[8:]
+    t8 = sorted_tensor[:N_BATCH // 2]
+    b8 = sorted_tensor[N_BATCH // 2:]
+
+    # cross entropy loss
+    top_loss = torch.sum(-torch.log(t8))
+    bottom_loss = torch.sum(-torch.log(1 - b8))
+
+    return top_loss + bottom_loss
+
+
+def unsquare_loss_function(probabilities):
+    # probabilities: output of cursed_predictor
+    probabilities_top = probabilities[:, 0]
+
+    # sort
+    sorted_tensor, indices = torch.sort(probabilities_top, descending=True)
+    # these are sorted from highest prob of top to lowest prob of top
+
+    # split into 2 groups
+    t8 = sorted_tensor[:N_BATCH // 2]
+    b8 = sorted_tensor[N_BATCH // 2:]
 
     # compute loss (log things?? squares? maybe not direct difference? idfk)
-    # simple cursed loss is
-    # for top 8, you take their diff from 1
-    # for bottom 8, you take their diff from 0
-    # and you sum them
-
-    # top 8
     top_loss = torch.sum(torch.abs(t8 - 1.0))
-    # bottom 8
     bottom_loss = torch.sum(torch.abs(b8 - 0.0))
 
     return top_loss + bottom_loss
 
 
-# now we want to train this thing
-# we need to generate random weights
-# we need to generate random input data
-# we need to compute the loss
-# we need to compute the gradient of the loss wrt the weights AND INPUT DATA
-# we need to update the weights
-# we need to repeat this process
-# we need to do this for a lot of iterations (4 iterations ?!?!)
-
-
 def cursed_train():
-    data = generate_random_input_data()
+    image_tensor = generate_random_input_data()
 
     weights = generate_random_weights()
-    params = [data, *weights]
+    params = [image_tensor, *weights]
     optimizer = torch.optim.SGD(params, lr=0.01)
 
     for i in range(100):
         for p in params:
             p.grad = None
-        loss = cursed_loss_function(data, weights)
+        probabilities = cursed_predictor(image_tensor, weights)
+        loss = cursed_loss_function(probabilities)
         loss.backward()
         optimizer.step()
-        print(i, loss)
+        if i % 5 == 0:
+            print(i, loss.item())
+
+    # now we want to print out/store the images
+
+    # ooh what if we store it in order
+    _, indices = torch.sort(probabilities[:, 0], descending=True)
+    sorted_tensor = image_tensor[indices]
+    # these are sorted from highest prob of top to lowest prob of top
+
+    # evaluate the loss function
+    # print("overall eval: ", unsquare_loss_function(probabilities)) cross entropy works slightly better idk
+
+    # numpy_data = data.detach().numpy() # convert to numpy array
+    from torchvision.utils import save_image
+
+    # Ensure that the tensor is in CPU memory
+    sorted_tensor = sorted_tensor.cpu()
+
+    # torch's `save_image` want the tensor values between 0 and 1 for RGB images (instead of between 0 and 255)??
+    # this image is on the order of [-.009, 1.009] which is like, small enough that i dont wanna normalize it lol?
+    # or ig i can,,, idk if it makes a difference
+    # or maybe i should normalize after each
+    # min_vals, _ = torch.min(image_tensor, dim=1)
+
+    # 'nrow' determines the number of images to be displayed in each row
+    save_image(sorted_tensor, 'images.png', nrow=4)
+
+    # i should also like store image data along with their labels.
+    # eh this is easy enough to implement, just pickle or something, so i'll do it later
 
 
 if __name__ == "__main__":
